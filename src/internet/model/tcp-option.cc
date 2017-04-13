@@ -80,6 +80,7 @@ TcpOption::CreateOption (uint8_t kind)
     { TcpOption::WINSCALE,      TcpOptionWinScale::GetTypeId () },
     { TcpOption::SACKPERMITTED, TcpOptionSackPermitted::GetTypeId () },
     { TcpOption::SACK,          TcpOptionSack::GetTypeId () },
+//    { TcpOption::DCR,          TcpOptionDCR::GetTypeId () },
     { TcpOption::UNKNOWN,  TcpOptionUnknown::GetTypeId () }
   };
 
@@ -107,6 +108,7 @@ TcpOption::IsKindKnown (uint8_t kind)
     case SACKPERMITTED:
     case SACK:
     case TS:
+    case DCR:
       // Do not add UNKNOWN here
       return true;
     }
