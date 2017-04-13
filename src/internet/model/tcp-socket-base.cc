@@ -100,6 +100,10 @@ TcpSocketBase::GetTypeId (void)
                    BooleanValue (true),
                    MakeBooleanAccessor (&TcpSocketBase::m_sackEnabled),
                    MakeBooleanChecker ())
+    .AddAttribute ("DCR", "Enable or disable DCR option",
+                   BooleanValue (true),
+                   MakeBooleanAccessor (&TcpSocketBase::m_dcrEnabled),
+                   MakeBooleanChecker ())
     .AddAttribute ("Timestamp", "Enable or disable Timestamp option",
                    BooleanValue (true),
                    MakeBooleanAccessor (&TcpSocketBase::m_timestampEnabled),
@@ -321,6 +325,7 @@ TcpSocketBase::TcpSocketBase (void)
     m_bytesAckedNotProcessed (0),
     m_bytesInFlight (0),
     m_sackEnabled (false),
+    m_dcrEnabled (false),
     m_winScalingEnabled (false),
     m_rcvWindShift (0),
     m_sndWindShift (0),
@@ -330,6 +335,7 @@ TcpSocketBase::TcpSocketBase (void)
     // Set m_recover to the initial sequence number
     m_recover (0),
     m_retxThresh (3),
+    m_dcrRetxThresh (3),
     m_limitedTx (false),
     m_congestionControl (0),
     m_isFirstPartialAck (true)
@@ -399,6 +405,7 @@ TcpSocketBase::TcpSocketBase (const TcpSocketBase& sock)
     m_bytesAckedNotProcessed (sock.m_bytesAckedNotProcessed),
     m_bytesInFlight (sock.m_bytesInFlight),
     m_sackEnabled (sock.m_sackEnabled),
+    m_dcrEnabled (sock.m_dcrEnabled),
     m_winScalingEnabled (sock.m_winScalingEnabled),
     m_rcvWindShift (sock.m_rcvWindShift),
     m_sndWindShift (sock.m_sndWindShift),
@@ -406,6 +413,7 @@ TcpSocketBase::TcpSocketBase (const TcpSocketBase& sock)
     m_timestampToEcho (sock.m_timestampToEcho),
     m_recover (sock.m_recover),
     m_retxThresh (sock.m_retxThresh),
+    m_dcrRetxThresh (sock.m_dcrRetxThresh),
     m_limitedTx (sock.m_limitedTx),
     m_isFirstPartialAck (sock.m_isFirstPartialAck),
     m_txTrace (sock.m_txTrace),
@@ -1493,6 +1501,8 @@ TcpSocketBase::IsTcpOptionEnabled (uint8_t kind) const
     case TcpOption::SACKPERMITTED:
     case TcpOption::SACK:
       return m_sackEnabled;
+    case TcpOption::DCR:
+      return m_dcrEnabled;
     default:
       break;
     }
@@ -1592,6 +1602,12 @@ TcpSocketBase::DupAck ()
       m_tcb->m_congState = TcpSocketState::CA_DISORDER;
 
       NS_LOG_DEBUG ("OPEN -> DISORDER");
+
+      if(m_dcrEnabled)
+        {
+          // Update value of m_dcrRetxThresh
+          m_dcrRetxThresh = Window (); //* (m_rtt->GetEstimate ()/instantRTT);
+        }
     }
 
   if (m_tcb->m_congState == TcpSocketState::CA_DISORDER)
@@ -1599,7 +1615,7 @@ TcpSocketBase::DupAck ()
       // RFC 6675, Section 5, continuing:
       // ... and take the following steps:
       // (1) If DupAcks >= DupThresh, go to step (4).
-      if ((m_dupAckCount == m_retxThresh) && (m_highRxAckMark >= m_recover))
+      if ((m_dupAckCount == m_retxThresh) && (m_highRxAckMark >= m_recover) && !m_dcrEnabled)
         {
           EnterRecovery ();
           NS_ASSERT (m_tcb->m_congState == TcpSocketState::CA_RECOVERY);
@@ -1608,7 +1624,21 @@ TcpSocketBase::DupAck ()
       // (indicating at least three segments have arrived above the current
       // cumulative acknowledgment point, which is taken to indicate loss)
       // go to step (4).
-      else if (m_txBuffer->IsLost (m_highRxAckMark + 1, m_retxThresh, m_tcb->m_segmentSize))
+      else if (m_txBuffer->IsLost (m_highRxAckMark + 1, m_retxThresh, m_tcb->m_segmentSize) && !m_dcrEnabled)
+        {
+          EnterRecovery ();
+          NS_ASSERT (m_tcb->m_congState == TcpSocketState::CA_RECOVERY);
+        }
+      else if ((m_dupAckCount == m_dcrRetxThresh) && (m_highRxAckMark >= m_recover) && m_dcrEnabled)
+        {
+          EnterRecovery ();
+          NS_ASSERT (m_tcb->m_congState == TcpSocketState::CA_RECOVERY);
+        }
+      // (2) If DupAcks < DupThresh but IsLost (HighACK + 1) returns true
+      // (indicating at least three segments have arrived above the current
+      // cumulative acknowledgment point, which is taken to indicate loss)
+      // go to step (4).
+      else if (m_txBuffer->IsLost (m_highRxAckMark + 1, m_dcrRetxThresh, m_tcb->m_segmentSize) && m_dcrEnabled)
         {
           EnterRecovery ();
           NS_ASSERT (m_tcb->m_congState == TcpSocketState::CA_RECOVERY);
@@ -1622,8 +1652,14 @@ TcpSocketBase::DupAck ()
           // (3.1) Set HighRxt to HighACK.
           // Not clear in RFC. We don't do this here, since we still have
           // to retransmit the segment.
-
-          NS_ASSERT (m_dupAckCount < m_retxThresh);
+          if (!m_dcrEnabled)
+            {
+              NS_ASSERT (m_dupAckCount < m_retxThresh);
+            }
+          else
+            {
+              NS_ASSERT (m_dupAckCount < m_dcrRetxThresh);
+            }
           if (m_limitedTx)
             {
               // (3.2) and (3.3) are performed in the following:
@@ -2821,7 +2857,13 @@ TcpSocketBase::SendPendingData (bool withAck)
       //       (i.e., terminate steps C.1 -- C.5).
       SequenceNumber32 next;
       if (!m_txBuffer->NextSeg (&next, m_retxThresh, m_tcb->m_segmentSize,
-                                m_tcb->m_congState == TcpSocketState::CA_RECOVERY))
+                                m_tcb->m_congState == TcpSocketState::CA_RECOVERY) && !m_dcrEnabled)
+        {
+          NS_LOG_INFO ("no valid seq to transmit, or no data available");
+          break;
+        }
+      if (!m_txBuffer->NextSeg (&next, m_dcrRetxThresh, m_tcb->m_segmentSize,
+                                m_tcb->m_congState == TcpSocketState::CA_RECOVERY) && m_dcrEnabled)
         {
           NS_LOG_INFO ("no valid seq to transmit, or no data available");
           break;
@@ -2915,8 +2957,15 @@ TcpSocketBase::BytesInFlight () const
   // PipeSize=SND.NXT-SND.UNA+(retransmits-dupacks)*CurMSS
 
   // flightSize == UnAckDataCount (), but we avoid the call to save log lines
-  uint32_t bytesInFlight = m_txBuffer->BytesInFlight (m_retxThresh, m_tcb->m_segmentSize);
-
+  uint32_t bytesInFlight;
+  if (!m_dcrEnabled)
+    {
+      bytesInFlight = m_txBuffer->BytesInFlight (m_retxThresh, m_tcb->m_segmentSize);
+    }
+  else
+    {
+      bytesInFlight = m_txBuffer->BytesInFlight (m_dcrRetxThresh, m_tcb->m_segmentSize);
+    }
   // m_bytesInFlight is traced; avoid useless assignments which would fire
   // fruitlessly the callback
   if (m_bytesInFlight != bytesInFlight)

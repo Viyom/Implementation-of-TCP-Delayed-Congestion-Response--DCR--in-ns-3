@@ -1131,6 +1131,7 @@ protected:
 
   // Options
   bool    m_sackEnabled;       //!< RFC SACK option enabled
+  bool    m_dcrEnabled;       //!< DCR option enabled
   bool    m_winScalingEnabled; //!< Window Scale option enabled (RFC 7323)
   uint8_t m_rcvWindShift;      //!< Window shift to apply to outgoing segments
   uint8_t m_sndWindShift;      //!< Window shift to apply to incoming segments
@@ -1143,6 +1144,7 @@ protected:
   // Fast Retransmit and Recovery
   SequenceNumber32       m_recover;      //!< Previous highest Tx seqnum for fast recovery
   uint32_t               m_retxThresh;   //!< Fast Retransmit threshold
+  uint32_t               m_dcrRetxThresh;   //!< Fast Retransmit threshold for DCR
   bool                   m_limitedTx;    //!< perform limited transmit
 
   // Transmission Control Block
