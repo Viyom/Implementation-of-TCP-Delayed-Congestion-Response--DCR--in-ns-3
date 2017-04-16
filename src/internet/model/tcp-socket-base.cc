@@ -299,6 +299,7 @@ TcpSocketBase::TcpSocketBase (void)
     m_minRto (Time::Max ()),
     m_clockGranularity (Seconds (0.001)),
     m_lastRtt (Seconds (0.0)),
+    m_instRtt (Seconds (0.0)),
     m_delAckTimeout (Seconds (0.0)),
     m_persistTimeout (Seconds (0.0)),
     m_cnTimeout (Seconds (0.0)),
@@ -383,6 +384,7 @@ TcpSocketBase::TcpSocketBase (const TcpSocketBase& sock)
     m_minRto (sock.m_minRto),
     m_clockGranularity (sock.m_clockGranularity),
     m_lastRtt (sock.m_lastRtt),
+    m_instRtt (sock.m_instRtt),
     m_delAckTimeout (sock.m_delAckTimeout),
     m_persistTimeout (sock.m_persistTimeout),
     m_cnTimeout (sock.m_cnTimeout),
@@ -1606,7 +1608,7 @@ TcpSocketBase::DupAck ()
       if(m_dcrEnabled)
         {
           // Update value of m_dcrRetxThresh
-          m_dcrRetxThresh = Window (); //* (m_rtt->GetEstimate ()/instantRTT);
+          m_dcrRetxThresh = Window () * (m_rtt->GetEstimate ().GetMilliSeconds () * 1.0 / m_instRtt.GetMilliSeconds ());
         }
     }
 
@@ -3140,6 +3142,7 @@ TcpSocketBase::EstimateRtt (const TcpHeader& tcpHeader)
 
   if (!m.IsZero ())
     {
+      m_instRtt = m;
       m_rtt->Measurement (m);                // Log the measurement
       // RFC 6298, clause 2.4
       m_rto = Max (m_rtt->GetEstimate () + Max (m_clockGranularity, m_rtt->GetVariation () * 4), m_minRto);

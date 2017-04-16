@@ -1090,6 +1090,7 @@ protected:
   Time              m_minRto;          //!< minimum value of the Retransmit timeout
   Time              m_clockGranularity; //!< Clock Granularity used in RTO calcs
   TracedValue<Time> m_lastRtt;         //!< Last RTT sample collected
+  Time              m_instRtt;         //!< Instantaneous RTT
   Time              m_delAckTimeout;   //!< Time to delay an ACK
   Time              m_persistTimeout;  //!< Time between sending 1-byte probes
   Time              m_cnTimeout;       //!< Timeout for connection retry
